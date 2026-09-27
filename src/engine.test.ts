@@ -488,4 +488,50 @@ describe('validateRules', () => {
       validateRules([{ action: { type: 'redirect', target: '/x', status: 200 } }]),
     ).toThrow('status');
   });
+
+  it('重复 id：保留首次出现，后续冲突分配新 id，顺序与匹配字段不变', () => {
+    const rules = validateRules([
+      { id: 'dup', host: 'a.com', pathTemplate: '/a', action: { target: '/x' } },
+      { id: 'dup', host: 'b.com', pathTemplate: '/b', action: { target: '/y' } },
+      { id: 'dup', host: 'c.com', pathTemplate: '/c', action: { target: '/z' } },
+    ]);
+    expect(rules.map((r) => r.id)).toHaveLength(3);
+    expect(new Set(rules.map((r) => r.id)).size).toBe(3);
+    expect(rules[0].id).toBe('dup');
+    expect(rules[1].id).not.toBe('dup');
+    expect(rules[2].id).not.toBe('dup');
+    expect(rules[2].id).not.toBe(rules[1].id);
+    // 顺序与匹配字段保持原样
+    expect(rules.map((r) => r.host)).toEqual(['a.com', 'b.com', 'c.com']);
+    expect(rules.map((r) => r.pathTemplate)).toEqual(['/a', '/b', '/c']);
+  });
+
+  it('空 / 缺失 id 分配新值，且新值不与原数据中靠后首次出现的 id 相撞', () => {
+    const rules = validateRules([
+      { host: 'a.com', action: { target: '/x' } },
+      { id: '', host: 'b.com', action: { target: '/y' } },
+      { id: 'later', host: 'c.com', action: { target: '/z' } },
+      { id: 42 as unknown as string, host: 'd.com', action: { target: '/w' } },
+    ]);
+    expect(new Set(rules.map((r) => r.id)).size).toBe(4);
+    expect(rules[2].id).toBe('later');
+    expect(rules[0].id).toBeTruthy();
+    expect(rules[1].id).toBeTruthy();
+    expect(rules[3].id).toBeTruthy();
+    for (const r of [rules[0], rules[1], rules[3]]) {
+      expect(r.id).not.toBe('later');
+    }
+  });
+
+  it('同一份含重复 / 空 id 的数据重复校验结果稳定（身份确定）', () => {
+    const input = [
+      { id: 'x', host: 'a.com', action: { target: '/x' } },
+      { id: 'x', host: 'b.com', action: { target: '/y' } },
+      { host: 'c.com', action: { target: '/z' } },
+    ];
+    const first = validateRules(input);
+    const second = validateRules(first);
+    // 已唯一的 id 再次校验时原样保留，模拟「保存后刷新」身份稳定
+    expect(second.map((r) => r.id)).toEqual(first.map((r) => r.id));
+  });
 });

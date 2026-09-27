@@ -217,6 +217,50 @@ describe('迁移链（历史无版本数据与多跳升级）', () => {
   });
 });
 
+// ---------- 规则 id 身份冲突修复 ----------
+
+describe('浏览器本地规则恢复时的 id 冲突修复', () => {
+  const dupRules = [
+    { ...RULE, id: 'same', host: 'a.com', pathTemplate: '/a' },
+    { ...RULE, id: 'same', host: 'b.com', pathTemplate: '/b' },
+    { ...RULE, id: '', host: 'c.com', pathTemplate: '/c' },
+  ];
+
+  it('v1 信封中携带重复 / 空 id 的规则：恢复后 id 唯一，保留首次出现', () => {
+    const deps = testDeps({
+      [rulesStore.key]: JSON.stringify(envelope(1, dupRules)),
+    });
+    const loaded = loadStore(rulesStore, deps);
+    const ids = loaded.value.map((r) => r.id);
+    expect(new Set(ids).size).toBe(3);
+    expect(ids[0]).toBe('same');
+    expect(ids[1]).not.toBe('same');
+    expect(ids[2]).toBeTruthy();
+    // 顺序与匹配字段不变
+    expect(loaded.value.map((r) => r.host)).toEqual(['a.com', 'b.com', 'c.com']);
+    expect(loaded.value.map((r) => r.pathTemplate)).toEqual(['/a', '/b', '/c']);
+  });
+
+  it('v0 裸数组遗留数据同样在恢复时去重', () => {
+    const deps = testDeps({ [rulesStore.key]: JSON.stringify(dupRules) });
+    const loaded = loadStore(rulesStore, deps);
+    expect(new Set(loaded.value.map((r) => r.id)).size).toBe(3);
+    expect(loaded.value[0].id).toBe('same');
+  });
+
+  it('保存去重后的规则并重新加载（模拟刷新）：身份保持稳定', () => {
+    const deps = testDeps({
+      [rulesStore.key]: JSON.stringify(envelope(1, dupRules)),
+    });
+    const first = loadStore(rulesStore, deps).value;
+    const saveRes = saveStore(rulesStore, first, deps);
+    expect(saveRes.ok).toBe(true);
+
+    const second = loadStore(rulesStore, deps).value;
+    expect(second.map((r) => r.id)).toEqual(first.map((r) => r.id));
+  });
+});
+
 // ---------- 未知版本与损坏恢复 ----------
 
 describe('损坏 / 未知版本隔离（不阻塞启动，可下载诊断）', () => {

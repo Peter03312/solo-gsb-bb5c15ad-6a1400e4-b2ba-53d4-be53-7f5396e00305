@@ -8,6 +8,17 @@ export function uid(): string {
   return `r-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/**
+ * 生成一个不与 forbidden 中任何值相撞的新 id。
+ * uid() 基于 UUID / 随机数，碰撞概率极低，但此处仍循环兜底，
+ * 保证在「原数据所有非空 id」+「本次已分配 id」的并集上严格唯一。
+ */
+function uniqueId(forbidden: ReadonlySet<string>): string {
+  let candidate = uid();
+  while (forbidden.has(candidate)) candidate = uid();
+  return candidate;
+}
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
@@ -46,10 +57,28 @@ function validateQuery(rawQuery: unknown, at: string): QueryCondition[] {
 /**
  * 校验并规范化导入的规则 JSON。
  * 字段缺失时给出合理默认值，类型错误时抛出带位置信息的中文错误。
+ *
+ * id 按原顺序统一分配，保证结果内唯一：
+ * - 保留每条非空 id 的首次出现；后续与它重复的 id、以及空 / 缺失 id 一律生成新值；
+ * - 新值不会与原数据中的任何非空 id（即使该 id 的首次出现位于更靠后的规则）
+ *   或本次已分配的 id 相撞，因此稳定保留「第一次出现」的语义；
+ * - 不改变规则顺序与任何匹配字段。
+ * 这样断点、覆盖统计、规则卡片等一切以 id 为键的功能都不会把不同规则错认为同一条。
  */
 export function validateRules(data: unknown): Rule[] {
   if (!Array.isArray(data)) {
     throw new Error('JSON 顶层必须是规则数组');
+  }
+  // 碰撞规避集合：预置原数据中的全部非空 id（即使该 id 属于尚未处理到的后续
+  // 规则——它的首次出现必须原样保留，故新 id 绝不能提前占用它），
+  // 处理过程中新分配的 id 也持续加入。
+  const used = new Set<string>();
+  // 已分配出去的原始 id，用于判定「首次出现」：仅首次出现的非空 id 原样保留。
+  const seen = new Set<string>();
+  for (const raw of data) {
+    if (isRecord(raw) && typeof raw.id === 'string' && raw.id !== '') {
+      used.add(raw.id);
+    }
   }
   return data.map((raw, i) => {
     const at = `第 ${i + 1} 条规则`;
@@ -93,8 +122,19 @@ export function validateRules(data: unknown): Rule[] {
       );
     }
 
+    // 首次出现的非空 id 原样保留；后续重复的 id、空 / 缺失 id 生成不与原数据
+    // 及已分配 id 相撞的新值。
+    let id: string;
+    if (typeof raw.id === 'string' && raw.id !== '' && !seen.has(raw.id)) {
+      id = raw.id;
+      seen.add(id);
+    } else {
+      id = uniqueId(used);
+      used.add(id);
+    }
+
     return {
-      id: typeof raw.id === 'string' && raw.id !== '' ? raw.id : uid(),
+      id,
       name: typeof raw.name === 'string' && raw.name !== '' ? raw.name : `规则 ${i + 1}`,
       enabled: typeof raw.enabled === 'boolean' ? raw.enabled : true,
       method: method as Rule['method'],
